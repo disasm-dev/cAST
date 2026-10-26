@@ -1,0 +1,9 @@
+# Written by tools/AstGen: collapsed in diffs and left out of GitHub's language stats.
+/src/cAST/Generated/** linguist-generated=true
+
+# Not published: `git archive` (and so the public repository) leaves these out. cAST.dev.slnx is the solution with them.
+/bench export-ignore
+/tests export-ignore
+/tools/Conformance export-ignore
+/cAST.dev.slnx export-ignore
+CLAUDE.md export-ignore

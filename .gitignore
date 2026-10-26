@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+.vs/
+bench/inputs/
+bench/go/gobench.exe
+node_modules/
+bench/rust/target*/
+bench/inputs-scripts/
+bench/swc/target/

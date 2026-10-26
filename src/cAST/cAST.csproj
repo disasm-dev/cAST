@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>cAST</RootNamespace>
+    <AssemblyName>cAST</AssemblyName>
+    <Description>JavaScript parser, AST, visitor, transformer, code generator and scope resolver for .NET.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="cAST.Tests" />
+    <InternalsVisibleTo Include="cAST.Bench" />
+  </ItemGroup>
+</Project>
