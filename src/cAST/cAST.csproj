@@ -2,6 +2,7 @@
   <PropertyGroup>
     <RootNamespace>cAST</RootNamespace>
     <AssemblyName>cAST</AssemblyName>
+    <Version>1.0.0</Version>
     <Description>JavaScript parser, AST, visitor, transformer, code generator and scope resolver for .NET.</Description>
     <IsAotCompatible>true</IsAotCompatible>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
