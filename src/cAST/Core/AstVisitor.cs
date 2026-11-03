@@ -21,7 +21,7 @@ namespace cAST;
 [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)]
 public abstract partial class AstVisitor
 {
-    private static readonly ConcurrentDictionary<Type, bool[]> s_overrides = new();
+    private static readonly ConcurrentDictionary<Type, (bool[] Overrides, KindMask Skip)> s_types = new();
 
     // Indexed by hook id (see Hooks): whether this visitor's type overrides that Visit* method.
     private readonly HookFlags _ov;
@@ -35,21 +35,29 @@ public abstract partial class AstVisitor
         private ulong _element0;
     }
 
-    /// <summary>Initializes the visitor (the set of overridden methods is computed once per type).</summary>
+    /// <summary>Initializes the visitor (the set of overridden methods and the kinds to skip are computed once per type).</summary>
     protected AstVisitor()
     {
         Type type = GetType();
-        if (!s_overrides.TryGetValue(type, out var ov))
+        if (!s_types.TryGetValue(type, out var info))
         {
-            ov = ComputeOverrides(type);
-            s_overrides.TryAdd(type, ov);
+            info = Describe(type);
+            s_types.TryAdd(type, info);
         }
-        ov.CopyTo(MemoryMarshal.CreateSpan(ref Unsafe.As<HookFlags, bool>(ref _ov), HookCount));
+        info.Overrides.CopyTo(MemoryMarshal.CreateSpan(ref Unsafe.As<HookFlags, bool>(ref _ov), HookCount));
+        _skip = info.Skip;
+    }
+
+    private static (bool[] Overrides, KindMask Skip) Describe([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] Type type)
+    {
+        bool[] ov = ComputeOverrides(type);
+        KindMask skip = default;
         for (int kind = 1; kind < NodeKinds.Count; kind++)
         {
             if (!ov[kind] && IsLeafKind(kind))
-                _skip[kind >> 6] |= 1UL << (kind & 63);
+                skip[kind >> 6] |= 1UL << (kind & 63);
         }
+        return (ov, skip);
     }
 
     private static bool IsLeafKind(int kind)
