@@ -278,6 +278,43 @@ public class JsPatternTests
     }
 
     [Fact]
+    public void AnOperatorHoleMatchesAnyOfItsOperators()
+    {
+        BinaryOperator[] operators = [BinaryOperator.LessThan, BinaryOperator.GreaterThan, BinaryOperator.StrictEquality];
+        var pattern = JsPattern.Parse("$r[$a] = $r[$b] < $r[$c] | 0;", operators);
+        using var ast = MustParse("""
+            s[0] = s[1] < s[2] | 0;
+            s[0] = s[1] > s[2] | 0;
+            s[0] = s[1] === s[2] | 0;
+            s[0] = s[1] <= s[2] | 0;
+            s[0] = s[1] < s[2] & 0;
+            t[0] = s[1] > s[2] | 0;
+            """);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.True(pattern.Match(Stmt(ast, i), out var b), $"statement {i}");
+            Assert.Equal(operators[i], b.Operator);
+        }
+        // Not in the set; another operator than the hole's, which stays as written; a repeated hole broken.
+        for (int i = 3; i < 6; i++)
+            Assert.False(pattern.Match(Stmt(ast, i), out _), $"statement {i}");
+    }
+
+    [Fact]
+    public void AnOperatorHoleIsTheOneExpressionOfTheFirstOperator()
+    {
+        Assert.Throws<ArgumentException>(() => JsPattern.Parse("$a + $b", []));
+        Assert.Throws<ArgumentException>(() => JsPattern.Parse("$a + $b", [BinaryOperator.Subtraction, BinaryOperator.Addition]));
+        Assert.Throws<ArgumentException>(() => JsPattern.Parse("$a + $b + $c", [BinaryOperator.Addition, BinaryOperator.Subtraction]));
+        using var ast = MustParse("a - b; f(x, a - b);");
+        Assert.True(JsPattern.Parse("$a - $b").Match(E(ast, 0), out var b));
+        Assert.Throws<InvalidOperationException>(() => b.Operator); // no operator hole
+        var call = JsPattern.Parse("f($n$, $a + $b)", [BinaryOperator.Addition, BinaryOperator.Subtraction]);
+        Assert.False(call.Match(E(ast, 1), out b));
+        Assert.Throws<InvalidOperationException>(() => b.Operator); // the match failed before it
+    }
+
+    [Fact]
     public void StatementTemplatesMayReturnBreakAndContinue()
     {
         var pattern = JsPattern.Parse("if ($c) { $r = $v; break; } else return $$;");
@@ -335,7 +372,8 @@ public class JsPatternTests
     public void MatchingAllocatesNothing()
     {
         var write = JsPattern.Parse("let $x = $v; $x++;");
-        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y; x = table[i] ^ 3089954259; var n = 1; var m; n++;");
+        var compare = JsPattern.Parse("$a < $b", [BinaryOperator.LessThan, BinaryOperator.GreaterThan]);
+        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y; x = table[i] ^ 3089954259; var n = 1; var m; n++; p > q;");
         List<Statement> list = [.. ast.Program.Body];
         Run();
         long before = GC.GetAllocatedBytesForCurrentThread();
@@ -350,6 +388,7 @@ public class JsPatternTests
             Assert.True(XorLoad.Match(Stmt(ast, 2), out var w) && w.Long("n") == 3089954259);
             Assert.True(write.Match(ast.Program.Body, 3, out var r, out int end) && end == 6 && r.Spelling("x") == WriteSpelling.Var);
             Assert.True(write.Match(list, 3, out _, out _));
+            Assert.True(compare.Match(E(ast, 6), out var c) && c.Operator == BinaryOperator.GreaterThan);
         }
     }
 

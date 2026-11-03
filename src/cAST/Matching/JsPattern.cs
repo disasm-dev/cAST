@@ -14,7 +14,7 @@ namespace cAST.Matching;
 /// A <c>let</c> statement declaring one <c>$name</c> (or <c>$$</c>) with a value is a write: <c>let $x = value;</c>
 /// matches <c>x = value;</c> with plain <c>=</c> as well as <c>var</c>, <c>let</c> or <c>const</c> declaring <c>x</c> alone
 /// with that value, and <see cref="Bindings.Spelling"/> says which. Other declarations, <c>let</c> in a <c>for</c> head
-/// included, match their own kind only.
+/// included, match their own kind only. <see cref="Parse(string, ReadOnlySpan{BinaryOperator})"/> adds an operator hole.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -33,6 +33,8 @@ public sealed class JsPattern
     private readonly sbyte[] _holes; // per template node: 0, Wildcard, Write on a write statement, or 1 + the index of its hole
     private readonly string[] _names;
     private readonly int _integers; // bit i set: hole i is an integer hole
+    private int _operator; // the binary expression that is the operator hole, or 0; set by Parse only
+    private int _operators; // bit k set: the operator hole matches BinaryOperator k
 
     private JsPattern(JsAst ast, int[] statements, sbyte[] holes, string[] names, int integers)
     {
@@ -105,6 +107,37 @@ public sealed class JsPattern
                 holes[node.Id] = Write;
         }
         return new JsPattern(ast, block.List.Ids.ToArray(), holes, [.. names], integers);
+    }
+
+    /// <summary>
+    /// Parses <paramref name="template"/> as <see cref="Parse(string)"/> does, with an operator hole: the one binary
+    /// expression of the template whose operator is <c>operators[0]</c> matches a binary expression with any of
+    /// <paramref name="operators"/>, and <see cref="Bindings.Operator"/> says which.
+    /// </summary>
+    /// <exception cref="JsSyntaxException">The template is not valid JavaScript.</exception>
+    /// <exception cref="ArgumentException">
+    /// As for <see cref="Parse(string)"/>, or <paramref name="operators"/> is empty, or the template has no or several
+    /// binary expressions of <c>operators[0]</c>.
+    /// </exception>
+    /// <example>
+    /// <c>JsPattern.Parse("$a === $b", [BinaryOperator.StrictEquality, BinaryOperator.StrictInequality])</c> matches
+    /// <c>x !== y</c>.
+    /// </example>
+    public static JsPattern Parse(string template, ReadOnlySpan<BinaryOperator> operators)
+    {
+        if (operators.IsEmpty) throw new ArgumentException("Name the template's operator and its alternatives.", nameof(operators));
+        var pattern = Parse(template);
+        foreach (var node in pattern._ast.Program.Descendants(NodeKind.BinaryExpression))
+        {
+            if (node.AsBinaryExpression().Operator != operators[0]) continue;
+            if (pattern._operator != 0)
+                throw new ArgumentException($"The template has more than one {operators[0]} expression.", nameof(template));
+            pattern._operator = node.Id;
+        }
+        if (pattern._operator == 0) throw new ArgumentException($"The template has no {operators[0]} expression.", nameof(template));
+        foreach (var op in operators)
+            pattern._operators |= 1 << (int)op;
+        return pattern;
     }
 
     /// <summary>Matches a template of one expression (with or without its semicolon) against <paramref name="node"/>.</summary>
@@ -208,7 +241,16 @@ public sealed class JsPattern
         if (hole != 0) return hole == Write ? SameWrite(p, ast, t, ref bindings) : Fill(hole, ast, t, ref bindings);
         ref NodeRecord pattern = ref _ast._nodes[p];
         ref NodeRecord target = ref ast._nodes[t];
-        if (pattern.Kind != target.Kind || pattern.Op != target.Op) return false;
+        if (pattern.Kind != target.Kind) return false;
+        if (p == _operator)
+        {
+            if (((_operators >> target.Op) & 1) == 0) return false;
+            bindings.SetOperator((BinaryOperator)target.Op);
+        }
+        else if (pattern.Op != target.Op)
+        {
+            return false;
+        }
         switch (pattern.Kind)
         {
             case NodeKind.Identifier:
@@ -321,6 +363,7 @@ public struct Bindings
     private Values _values;
     private int _bound;
     private ulong _spellings; // 4 bits per hole: 1 + its WriteSpelling, or 0
+    private int _operator; // 1 + the operator the operator hole matched, or 0
 
     [InlineArray(Capacity)]
     private struct Values
@@ -372,6 +415,12 @@ public struct Bindings
         return (WriteSpelling)(spelling - 1);
     }
 
+    /// <summary>The operator the operator hole matched.</summary>
+    /// <exception cref="InvalidOperationException">The pattern has no operator hole, or the match failed before it.</exception>
+    public readonly BinaryOperator Operator => _operator != 0
+        ? (BinaryOperator)(_operator - 1)
+        : throw new InvalidOperationException("No operator is bound: the pattern has no operator hole, or the match failed before it.");
+
     private readonly long Get(string name, bool integer)
     {
         if (_pattern is null) throw new InvalidOperationException("These bindings come from no match.");
@@ -391,6 +440,8 @@ public struct Bindings
         _values[index] = value;
         _bound |= 1 << index;
     }
+
+    internal void SetOperator(BinaryOperator op) => _operator = (int)op + 1;
 
     internal void Spell(int index, WriteSpelling spelling)
     {
