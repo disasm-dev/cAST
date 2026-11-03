@@ -163,6 +163,121 @@ public class JsPatternTests
     }
 
     [Fact]
+    public void ARunPassesOverBareDeclarations()
+    {
+        var pattern = JsPattern.Parse("let $a = $s.split('|'); let $i = 0; while ($$) {}");
+        using var ast = MustParse("var a; var parts = 'x|y'.split('|'); var b, c; let d; i = 0; while (true) {} f();");
+        var body = ast.Program.Body;
+        Assert.False(pattern.Match(body, 0, out _, out _)); // the run starts at its first statement
+        Assert.True(pattern.Match(body, 1, out var b, out int end));
+        Assert.Equal(6, end);
+        Assert.True(b["a"].IsIdentifierNamed("parts"));
+        Assert.True(b["i"].IsIdentifierNamed("i"));
+        Assert.Equal(WriteSpelling.Assign, b.Spelling("i"));
+        Assert.False(pattern.Match(body, 1, out _)); // one for one, the declarations are in the way
+        Assert.False(pattern.Match(body, 2, out _, out _));
+        using var valued = MustParse("var parts = s.split('|'); var e = 1; i = 0; while (1) {}");
+        Assert.False(pattern.Match(valued.Program.Body, 0, out _, out _)); // var e = 1 is not bare
+    }
+
+    [Fact]
+    public void ARunTriesEachBareDeclarationOnTheTemplateFirst()
+    {
+        var declared = JsPattern.Parse("f(); var $d; $d = 2;");
+        using var ast = MustParse("f(); var x; var y; x = 2;");
+        Assert.True(declared.Match(ast.Program.Body, 0, out var b, out int end));
+        Assert.True(b["d"].IsIdentifierNamed("x"));
+        Assert.Equal(4, end);
+
+        var partly = JsPattern.Parse("f(); var $b, $c = 1; g($b);");
+        using var tried = MustParse("f(); var x, y; var z, w = 1; g(z);");
+        Assert.True(partly.Match(tried.Program.Body, 0, out b, out end));
+        Assert.True(b["b"].IsIdentifierNamed("z")); // not x, bound by the failed try on var x, y
+        Assert.Equal(4, end);
+    }
+
+    [Fact]
+    public void ARunMatchesStatementsGatheredIntoAList()
+    {
+        var pattern = JsPattern.Parse("let $a = 1; $a++;");
+        using var ast = MustParse("var a = 1; debugger; var b; a++; f();");
+        List<Statement> kept = [.. ast.Program.Body.Where(s => s.Kind != NodeKind.DebuggerStatement)];
+        Assert.True(pattern.Match(kept, 0, out var b, out int end));
+        Assert.Equal(3, end);
+        Assert.True(b["a"].IsIdentifierNamed("a"));
+        Assert.False(pattern.Match(kept, 4, out _, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => pattern.Match(kept, 5, out _, out _));
+        using var other = MustParse("a++;");
+        kept[2] = Stmt(other, 0);
+        Assert.Throws<ArgumentException>(() => pattern.Match(kept, 0, out _, out _));
+    }
+
+    [Fact]
+    public void ALetTemplateMatchesEverySpellingOfAWrite()
+    {
+        var pattern = JsPattern.Parse("let $x = $v + 1;");
+        using var ast = MustParse("a = b + 1; var a = b + 1; let a = b + 1; const a = b + 1;");
+        WriteSpelling[] spellings = [WriteSpelling.Assign, WriteSpelling.Var, WriteSpelling.Let, WriteSpelling.Const];
+        for (int i = 0; i < 4; i++)
+        {
+            Assert.True(pattern.Match(Stmt(ast, i), out var b), $"statement {i}");
+            Assert.True(b["x"].IsIdentifierNamed("a"));
+            Assert.True(b["v"].IsIdentifierNamed("b"));
+            Assert.Equal(spellings[i], b.Spelling("x"));
+        }
+    }
+
+    [Theory]
+    [InlineData("a += b + 1;")]
+    [InlineData("a = b + 2;")]
+    [InlineData("o.a = b + 1;")]
+    [InlineData("[a] = b + 1;")]
+    [InlineData("a = b + 1, c;")]
+    [InlineData("f(a = b + 1);")]
+    [InlineData("var a;")]
+    [InlineData("var a = b + 1, c;")]
+    [InlineData("var [a] = b + 1;")]
+    public void AWriteMatchesNothingElse(string code)
+    {
+        using var ast = MustParse(code);
+        Assert.False(JsPattern.Parse("let $x = $v + 1;").Match(Stmt(ast, 0), out _));
+    }
+
+    [Fact]
+    public void OtherDeclarationsMatchTheirOwnKind()
+    {
+        using var ast = MustParse("x = 1; var x = 1; let x = 1; for (x = 1;;) {} for (var x = 1;;) {} for (let x = 1;;) {}");
+        var declared = JsPattern.Parse("var $x = 1;");
+        Assert.False(declared.Match(Stmt(ast, 0), out _));
+        Assert.True(declared.Match(Stmt(ast, 1), out _));
+        Assert.False(declared.Match(Stmt(ast, 2), out _));
+        var loop = JsPattern.Parse("for (let $x = 1;;) {}"); // a for head is not a statement
+        Assert.False(loop.Match(Stmt(ast, 3), out _));
+        Assert.False(loop.Match(Stmt(ast, 4), out _));
+        Assert.True(loop.Match(Stmt(ast, 5), out _));
+        using var pair = MustParse("let x = 1, y = 2; var x = 1, y = 2;");
+        var two = JsPattern.Parse("let $x = 1, $y = 2;");
+        Assert.True(two.Match(Stmt(pair, 0), out _));
+        Assert.False(two.Match(Stmt(pair, 1), out _));
+    }
+
+    [Fact]
+    public void WritesNameOneVariableAndTheWildcardNone()
+    {
+        var pattern = JsPattern.Parse("let $i = 0; let $i = $i + 1;");
+        using var ast = MustParse("var i = 0; i = i + 1; var j = 0; k = j + 1;");
+        Assert.True(pattern.Match(ast.Program.Body, 0, out var b));
+        Assert.Equal(WriteSpelling.Var, b.Spelling("i")); // the first write's
+        Assert.False(pattern.Match(ast.Program.Body, 2, out _));
+
+        var any = JsPattern.Parse("let $$ = $v;");
+        using var writes = MustParse("a = f(); const b = g;");
+        Assert.True(any.Match(Stmt(writes, 0), out b));
+        Assert.True(b["v"].IsCall("f", out _));
+        Assert.True(any.Match(Stmt(writes, 1), out _));
+    }
+
+    [Fact]
     public void StatementTemplatesMayReturnBreakAndContinue()
     {
         var pattern = JsPattern.Parse("if ($c) { $r = $v; break; } else return $$;");
@@ -191,6 +306,8 @@ public class JsPatternTests
         Assert.Throws<InvalidOperationException>(() => b.Int("n")); // the match failed before it
         Assert.Throws<InvalidOperationException>(() => b.Int("t")); // an expression hole
         Assert.Throws<InvalidOperationException>(() => b.Long("t"));
+        Assert.Throws<InvalidOperationException>(() => b.Spelling("k")); // no write statement names it
+        Assert.Throws<InvalidOperationException>(() => b.Spelling("n")); // an integer hole
         Assert.Throws<InvalidOperationException>(() => b["n"]); // an integer hole
         Assert.Throws<KeyNotFoundException>(() => b["z"]);
         Assert.Throws<InvalidOperationException>(() => default(Bindings)["t"]);
@@ -217,7 +334,9 @@ public class JsPatternTests
     [Fact]
     public void MatchingAllocatesNothing()
     {
-        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y; x = table[i] ^ 3089954259;");
+        var write = JsPattern.Parse("let $x = $v; $x++;");
+        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y; x = table[i] ^ 3089954259; var n = 1; var m; n++;");
+        List<Statement> list = [.. ast.Program.Body];
         Run();
         long before = GC.GetAllocatedBytesForCurrentThread();
         Run();
@@ -229,6 +348,8 @@ public class JsPatternTests
             Assert.False(XorLoad.Match(Stmt(ast, 1), out _));
             Assert.False(XorLoad.Match(ast.Program.Body, 1, out _));
             Assert.True(XorLoad.Match(Stmt(ast, 2), out var w) && w.Long("n") == 3089954259);
+            Assert.True(write.Match(ast.Program.Body, 3, out var r, out int end) && end == 6 && r.Spelling("x") == WriteSpelling.Var);
+            Assert.True(write.Match(list, 3, out _, out _));
         }
     }
 
