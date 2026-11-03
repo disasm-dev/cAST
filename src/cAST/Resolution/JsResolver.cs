@@ -103,6 +103,7 @@ internal sealed class Resolver : AstVisitor
             else Ast.ClearScopeContexts(node.Id);
         }
         Ast._scopeContextsSet = true;
+        Ast.StartResolution(node.Kind == NodeKind.Program);
         PushScope(); // the root (global) scope: TopLevel
         node.Accept(this);
     }

@@ -41,10 +41,14 @@ public sealed partial class JsAst : IDisposable
     // reused within an arena, so a context left over from an earlier resolution cannot match a current one.
     internal int _nextScopeContext = (int)ScopeContext.TopLevel + 1;
 
-    // The binding numbers the resolver has given (Identifier.BindingNumber): each below this, never given twice to two
-    // bindings; a global's is its name's (by string id, plus one, 0 for none) whichever run gives it.
+    // The binding numbers the resolver has given (Identifier.BindingNumber) since it last ran over the whole program, which
+    // clears every number with the contexts: each below this, never given twice to two bindings; a global's is its name's
+    // (by string id, plus one, 0 for none) whichever run since gives it.
     internal int _bindingNumbers;
     internal int[] _globalBindingNumbers = [];
+
+    // How many times the resolver has run in the arena.
+    internal int _resolutions;
 
     // The resolver of this arena, kept with its tables for the next resolution.
     internal Resolution.Resolver? _resolver;
@@ -151,15 +155,36 @@ public sealed partial class JsAst : IDisposable
     }
 
     /// <summary>
-    /// How many binding numbers the resolver has given in this arena: every <see cref="Identifier.BindingNumber"/> is below
-    /// this, so a table indexed by binding number needs this many entries.
+    /// How many binding numbers the resolver has given in this arena since it last resolved the whole program: every
+    /// <see cref="Identifier.BindingNumber"/> is below this, so a table indexed by binding number needs this many entries.
     /// </summary>
     public int BindingNumbers => _bindingNumbers;
 
-    /// <summary>Allocates a binding number never used before in this arena.</summary>
+    /// <summary>
+    /// How many times the resolver has run in this arena. Resolving the whole program numbers the bindings from 0 again, so
+    /// a table built from the binding numbers or scope contexts of one run is stale once this has moved on.
+    /// </summary>
+    public int Resolutions => _resolutions;
+
+    /// <summary>
+    /// Counts a run of the resolver. A run over the whole program has cleared every context in the arena, and so every
+    /// binding number, so numbering starts again.
+    /// </summary>
+    internal void StartResolution(bool wholeProgram)
+    {
+        _resolutions++;
+        if (!wholeProgram) return;
+        _bindingNumbers = 0;
+        Array.Clear(_globalBindingNumbers);
+    }
+
+    /// <summary>Allocates a binding number not given since the whole program was last resolved.</summary>
     internal int NextBindingNumber() => _bindingNumbers++;
 
-    /// <summary>The binding number of the global named by string <paramref name="name"/>, the same in every run.</summary>
+    /// <summary>
+    /// The binding number of the global named by string <paramref name="name"/>, the same in every run until the whole
+    /// program is resolved again.
+    /// </summary>
     internal int GlobalBindingNumber(int name)
     {
         if (name >= _globalBindingNumbers.Length)
