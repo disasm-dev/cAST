@@ -6,9 +6,10 @@ namespace cAST.Matching;
 /// <summary>
 /// A JavaScript template matched against nodes node for node: kinds, operators, flags, names and literal values (not their
 /// raw text) must be equal; positions, comments and scope contexts are ignored. Identifiers starting with <c>$</c> are
-/// holes: <c>$name</c> matches any expression and binds it, <c>$name$</c> matches an integer literal (as
-/// <see cref="Js.IsInt32"/>) and binds its value, and <c>$$</c> matches any expression without binding it. A hole used
-/// twice matches only the same thing both times: identifiers of the same name (not binding), or the same integer.
+/// holes: <c>$name</c> matches any expression and binds it, <c>$name$</c> matches a number literal holding a whole
+/// number of at most 2^53 either way, or <c>-</c> on one (not <c>-0</c>), and binds its value, and <c>$$</c> matches any
+/// expression without binding it. A hole used twice matches only the same thing both times: identifiers of the same name
+/// (not binding), or the same integer.
 /// </summary>
 /// <remarks>
 /// Parse a pattern once and keep it (<c>static readonly</c>). Matching only reads it, so one pattern can be used from
@@ -18,6 +19,7 @@ namespace cAST.Matching;
 public sealed class JsPattern
 {
     private const sbyte Wildcard = -1;
+    private const double MaxWhole = 9007199254740992; // 2^53: every whole number up to it is a double
 
     private readonly JsAst _ast;
     private readonly int[] _statements;
@@ -126,7 +128,7 @@ public sealed class JsPattern
         int index = Array.IndexOf(_names, name);
         if (index < 0) throw new KeyNotFoundException($"The template has no hole \"{name}\".");
         if (IsInteger(_integers, index) != integer)
-            throw new InvalidOperationException(integer ? $"${name} is an expression hole: read it with the indexer." : $"${name}$ is an integer hole: read it with Int.");
+            throw new InvalidOperationException(integer ? $"${name} is an expression hole: read it with the indexer." : $"${name}$ is an integer hole: read it with Int or Long.");
         return index;
     }
 
@@ -184,18 +186,35 @@ public sealed class JsPattern
         int index = hole - 1;
         if (IsInteger(_integers, index))
         {
-            if (!node.IsInt32(out int value)) return false;
-            if (bindings.TryGet(index, out int bound)) return bound == value;
+            if (!IsWhole(node, out long value)) return false;
+            if (bindings.TryGet(index, out long bound)) return bound == value;
             bindings.Set(index, value);
             return true;
         }
-        if (bindings.TryGet(index, out int first))
+        if (bindings.TryGet(index, out long first))
         {
-            return node.Kind == NodeKind.Identifier && ast._nodes[first].Kind == NodeKind.Identifier
-                && ast.GetLazySpan(first, 0).SequenceEqual(ast.GetLazySpan(t, 0));
+            return node.Kind == NodeKind.Identifier && ast._nodes[(int)first].Kind == NodeKind.Identifier
+                && ast.GetLazySpan((int)first, 0).SequenceEqual(ast.GetLazySpan(t, 0));
         }
         bindings.Set(index, t);
         return true;
+    }
+
+    // Whether the expression is a number literal holding a whole number of at most 2^53 either way, or - on one; -0 is not.
+    private static bool IsWhole(Expression node, out long value)
+    {
+        bool negated = node.TryGetUnaryExpression(out var u) && u.Operator == UnaryOperator.Negation;
+        if ((negated ? u.Operand : node).TryGetNumberLiteral(out var number))
+        {
+            double v = negated ? -number.Value : number.Value;
+            if (Math.Abs(v) <= MaxWhole && v == Math.Truncate(v) && (v != 0 || !double.IsNegative(v)))
+            {
+                value = (long)v;
+                return true;
+            }
+        }
+        value = 0;
+        return false;
     }
 }
 
@@ -212,7 +231,7 @@ public struct Bindings
     [InlineArray(Capacity)]
     private struct Values
     {
-        private int _element0;
+        private long _element0; // a node id, or an integer hole's value
     }
 
     internal Bindings(JsPattern pattern, JsAst? ast)
@@ -224,28 +243,40 @@ public struct Bindings
     /// <summary>The expression the hole <c>$name</c> matched.</summary>
     /// <exception cref="KeyNotFoundException">The template has no hole <paramref name="name"/>.</exception>
     /// <exception cref="InvalidOperationException">The hole is an integer hole, or the match failed before it.</exception>
-    public readonly Expression this[string name] => new(_ast!, Get(name, integer: false));
+    public readonly Expression this[string name] => new(_ast!, (int)Get(name, integer: false));
 
     /// <summary>The value the integer hole <c>$name$</c> matched.</summary>
     /// <exception cref="KeyNotFoundException">The template has no hole <paramref name="name"/>.</exception>
     /// <exception cref="InvalidOperationException">The hole is an expression hole, or the match failed before it.</exception>
-    public readonly int Int(string name) => Get(name, integer: true);
+    /// <exception cref="OverflowException">The value is outside <see cref="int"/>: read it with <see cref="Long"/>.</exception>
+    public readonly int Int(string name)
+    {
+        long value = Get(name, integer: true);
+        if (value is < int.MinValue or > int.MaxValue)
+            throw new OverflowException($"${name}$ matched {value}, which is outside Int32: read it with Long.");
+        return (int)value;
+    }
 
-    private readonly int Get(string name, bool integer)
+    /// <summary>The value the integer hole <c>$name$</c> matched.</summary>
+    /// <exception cref="KeyNotFoundException">The template has no hole <paramref name="name"/>.</exception>
+    /// <exception cref="InvalidOperationException">The hole is an expression hole, or the match failed before it.</exception>
+    public readonly long Long(string name) => Get(name, integer: true);
+
+    private readonly long Get(string name, bool integer)
     {
         if (_pattern is null) throw new InvalidOperationException("These bindings come from no match.");
         int index = _pattern.HoleIndex(name, integer);
-        if (!TryGet(index, out int value)) throw new InvalidOperationException($"The hole \"{name}\" is not bound: the match failed before it.");
+        if (!TryGet(index, out long value)) throw new InvalidOperationException($"The hole \"{name}\" is not bound: the match failed before it.");
         return value;
     }
 
-    internal readonly bool TryGet(int index, out int value)
+    internal readonly bool TryGet(int index, out long value)
     {
         value = _values[index];
         return ((_bound >> index) & 1) != 0;
     }
 
-    internal void Set(int index, int value)
+    internal void Set(int index, long value)
     {
         _values[index] = value;
         _bound |= 1 << index;

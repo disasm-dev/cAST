@@ -84,14 +84,39 @@ public class JsPatternTests
     }
 
     [Fact]
-    public void IntegerHolesMatchInt32LiteralsOnly()
+    public void IntegerHolesMatchWholeNumbersUpTo2To53()
     {
         var pattern = JsPattern.Parse("$x$ + $y$");
-        using var ast = MustParse("1 + -2; 1 + 2.5; 1 + y; 1 + '2'; 1 + -0;");
+        using var ast = MustParse("""
+            1 + -2;
+            3089954259 + -0x20000000000000;
+            9007199254740992 + 1e3;
+            1 + 2.5; 1 + y; 1 + '2'; 1 + -0; 1 + 9007199254740994; 1 + -9007199254740994; 1 + 1e400; 1 + -x;
+            """);
         Assert.True(pattern.Match(E(ast, 0), out var b));
         Assert.Equal((1, -2), (b.Int("x"), b.Int("y")));
-        for (int i = 1; i < 5; i++)
+        Assert.Equal((1L, -2L), (b.Long("x"), b.Long("y")));
+        Assert.True(pattern.Match(E(ast, 1), out b));
+        Assert.Equal((3089954259L, -9007199254740992L), (b.Long("x"), b.Long("y")));
+        Assert.True(pattern.Match(E(ast, 2), out b));
+        Assert.Equal((9007199254740992L, 1000), (b.Long("x"), b.Int("y")));
+        for (int i = 3; i < 11; i++)
             Assert.False(pattern.Match(E(ast, i), out _), $"statement {i}");
+    }
+
+    [Fact]
+    public void IntRefusesValuesOutsideInt32()
+    {
+        var pattern = JsPattern.Parse("$s$ ^ $s$");
+        using var ast = MustParse("3089954259 ^ 3089954259; 3089954259 ^ -1205013037; -2147483649 ^ -2147483649; -2147483648 ^ -2147483648;");
+        Assert.True(pattern.Match(E(ast, 0), out var b));
+        Assert.Equal(3089954259L, b.Long("s"));
+        Assert.Throws<OverflowException>(() => b.Int("s"));
+        Assert.False(pattern.Match(E(ast, 1), out _)); // the same low 32 bits, but another number
+        Assert.True(pattern.Match(E(ast, 2), out var below));
+        Assert.Throws<OverflowException>(() => below.Int("s"));
+        Assert.True(pattern.Match(E(ast, 3), out b));
+        Assert.Equal(int.MinValue, b.Int("s"));
     }
 
     [Fact]
@@ -165,6 +190,7 @@ public class JsPatternTests
         Assert.True(b["k"].IsIdentifierNamed("i")); // bound before the match failed
         Assert.Throws<InvalidOperationException>(() => b.Int("n")); // the match failed before it
         Assert.Throws<InvalidOperationException>(() => b.Int("t")); // an expression hole
+        Assert.Throws<InvalidOperationException>(() => b.Long("t"));
         Assert.Throws<InvalidOperationException>(() => b["n"]); // an integer hole
         Assert.Throws<KeyNotFoundException>(() => b["z"]);
         Assert.Throws<InvalidOperationException>(() => default(Bindings)["t"]);
@@ -191,7 +217,7 @@ public class JsPatternTests
     [Fact]
     public void MatchingAllocatesNothing()
     {
-        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y;");
+        using var ast = MustParse("x = table[i] ^ 0x5f; x = table[i] ^ y; x = table[i] ^ 3089954259;");
         Run();
         long before = GC.GetAllocatedBytesForCurrentThread();
         Run();
@@ -202,6 +228,7 @@ public class JsPatternTests
             Assert.True(XorLoad.Match(Stmt(ast, 0), out var b) && b.Int("n") == 0x5f);
             Assert.False(XorLoad.Match(Stmt(ast, 1), out _));
             Assert.False(XorLoad.Match(ast.Program.Body, 1, out _));
+            Assert.True(XorLoad.Match(Stmt(ast, 2), out var w) && w.Long("n") == 3089954259);
         }
     }
 
