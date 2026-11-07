@@ -40,6 +40,38 @@ public static partial class Js
             returned = default;
             return false;
         }
+
+        /// <summary>Whether the statement is <c>name = value;</c> with plain <c>=</c>.</summary>
+        public bool IsNameAssignment(out Identifier name, out Expression value)
+        {
+            if (statement.TryGetExpressionStatement(out var s)) return s.Expression.IsNameAssign(out name, out value);
+            name = default;
+            value = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Whether the statement declares one name and nothing else, <c>var name = value;</c> (<c>let</c> and <c>const</c>
+        /// as well); the value is none for <c>var name;</c>.
+        /// </summary>
+        public bool IsNameDeclaration(out Identifier name, out Expression value)
+        {
+            if (statement.TryGetVariableDeclaration(out var d) && d.List.Count == 1 && d.List[0].Target.TryGetIdentifier(out name))
+            {
+                value = d.List[0].Initializer;
+                return true;
+            }
+            name = default;
+            value = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Whether the statement writes a name, as <see cref="IsNameAssignment"/> or <see cref="IsNameDeclaration"/> reads it:
+        /// <c>name = value;</c> or <c>var name = value;</c>, the value none for <c>var name;</c>.
+        /// </summary>
+        public bool IsNameWrite(out Identifier name, out Expression value) =>
+            statement.IsNameAssignment(out name, out value) || statement.IsNameDeclaration(out name, out value);
     }
 
     extension(Expression expression)
@@ -57,6 +89,38 @@ public static partial class Js
                 return true;
             }
             target = value = default;
+            return false;
+        }
+
+        /// <summary>Whether the expression is <c>name = value</c> with plain <c>=</c>.</summary>
+        public bool IsNameAssign(out Identifier name, out Expression value)
+        {
+            if (expression.IsAssign(out var target, out value) && target.TryGetIdentifier(out name)) return true;
+            name = default;
+            return false;
+        }
+
+        /// <summary>
+        /// The expression whose value the expression gives: a sequence's last, followed into sequences, so <c>(a, b)</c> gives
+        /// <c>b</c>; any other expression is its own.
+        /// </summary>
+        public Expression Last()
+        {
+            var last = expression;
+            while (last.TryGetSequenceExpression(out var sequence) && sequence.Sequence.Count > 0)
+                last = sequence.Sequence[sequence.Sequence.Count - 1];
+            return last;
+        }
+
+        /// <summary>Whether the expression is a number literal holding a whole number from 0 to <see cref="int.MaxValue"/>.</summary>
+        public bool IsWholeNumber(out int value)
+        {
+            if (expression.TryGetNumberLiteral(out var number) && number.Value is >= 0 and <= int.MaxValue && number.Value == Math.Floor(number.Value))
+            {
+                value = (int)number.Value;
+                return true;
+            }
+            value = 0;
             return false;
         }
 

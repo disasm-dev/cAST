@@ -150,6 +150,26 @@ public readonly struct NodeList<T> : IReadOnlyList<T> where T : struct, INode<T>
 
     private static void ThrowIndex() => throw new ArgumentOutOfRangeException("index");
 
+    /// <summary>Whether every element meets the condition, without the allocations LINQ makes for a struct list.</summary>
+    public bool All(Func<T, bool> condition)
+    {
+        foreach (var item in this)
+        {
+            if (!condition(item)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Whether any element meets the condition, without the allocations LINQ makes for a struct list.</summary>
+    public bool Any(Func<T, bool> condition)
+    {
+        foreach (var item in this)
+        {
+            if (condition(item)) return true;
+        }
+        return false;
+    }
+
     /// <summary>Returns an enumerator over the elements (snapshot of the current range).</summary>
     public Enumerator GetEnumerator() => new(_ast, _owner == 0 ? 0 : StartSlot(), Count);
 

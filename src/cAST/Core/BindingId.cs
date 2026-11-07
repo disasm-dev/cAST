@@ -31,7 +31,7 @@ public readonly struct BindingId : IEquatable<BindingId>
     public override bool Equals(object? obj) => obj is BindingId other && Equals(other);
 
     /// <inheritdoc/>
-    public override int GetHashCode() => HashCode.Combine(NameId, ScopeContext);
+    public override int GetHashCode() => NameId * 397 ^ (int)ScopeContext;
 
     /// <summary>Whether two ids refer to the same binding.</summary>
     public static bool operator ==(BindingId left, BindingId right) => left.Equals(right);
@@ -63,6 +63,19 @@ public readonly partial struct Identifier
                 throw new InvalidOperationException($"The identifier \"{Name}\" has no binding number: resolve the script again.");
             return r.E - 1;
         }
+    }
+
+    /// <summary>
+    /// Makes this identifier name the binding <paramref name="target"/> refers to, with no need to resolve the script again.
+    /// The caller answers for the name meaning that binding where this identifier stands.
+    /// </summary>
+    public void RebindTo(Identifier target)
+    {
+        int number = target.BindingNumber;
+        var context = target.ScopeContext;
+        Name = target.Name;
+        SetScopeContextUnflagged(context);
+        SetBindingNumber(number, context);
     }
 
     // Kept with the context it was given in, so a context set by hand since is caught.

@@ -41,6 +41,18 @@ public sealed partial class JsAst
         return copy;
     }
 
+    /// <summary>
+    /// Copies what the program still holds into a new, independent arena, in tree order: the nodes and lists transforms left
+    /// behind stay here. Scope contexts are not copied: the copy is unresolved until it is resolved.
+    /// </summary>
+    public JsAst Compact()
+    {
+        var copy = new JsAst(_source, _nodeCount / 2, _listCount / 2, _stringCount);
+        copy.InitCloneStack();
+        copy._root = copy.CopyTree(this, _root);
+        return copy;
+    }
+
     private JsAst(JsAst other)
     {
         _source = other._source;
@@ -209,6 +221,23 @@ public sealed partial class JsAst
         ref NodeRecord r = ref AllocRecord(copy.Kind, out int newId);
         r = copy;
         return newId;
+    }
+
+    /// <summary>Whether <paramref name="value"/> is in the string table: a name only sliced from the source joins it when first read.</summary>
+    public bool IsInterned(ReadOnlySpan<char> value)
+    {
+        int hash = NameHash.Compute(value);
+        var buckets = _buckets;
+        int mask = _bucketMask;
+        int i = hash & mask;
+        while (true)
+        {
+            ref Bucket b = ref buckets[i];
+            int id = b.Id;
+            if (id == 0) return false;
+            if (b.Hash == hash && EntryEquals(id, value)) return true;
+            i = (i + 1) & mask;
+        }
     }
 
     /// <summary>Interns <paramref name="value"/>, allocating a string only if it is new.</summary>

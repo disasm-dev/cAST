@@ -144,6 +144,72 @@ public class ShapeTests
         Assert.False(E(ast, 0).IsInt32(out _));
     }
 
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("7", 7)]
+    [InlineData("1e3", 1000)]
+    [InlineData("2147483647", int.MaxValue)]
+    public void WholeNumbers(string code, int expected)
+    {
+        using var ast = MustParse(code + ";");
+        Assert.True(E(ast, 0).IsWholeNumber(out int value));
+        Assert.Equal(expected, value);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1.5")]
+    [InlineData("2147483648")]
+    [InlineData("'5'")]
+    [InlineData("x")]
+    public void NotWholeNumbers(string code)
+    {
+        using var ast = MustParse(code + ";");
+        Assert.False(E(ast, 0).IsWholeNumber(out _));
+    }
+
+    [Theory]
+    [InlineData("x = 1;", true)]
+    [InlineData("var x = 1;", true)]
+    [InlineData("let x;", true)]
+    [InlineData("o.x = 1;", false)]
+    [InlineData("x += 1;", false)]
+    [InlineData("var x = 1, y = 2;", false)]
+    [InlineData("[x] = a;", false)]
+    public void NameWrites(string code, bool written)
+    {
+        using var ast = MustParse(code);
+        Assert.Equal(written, Stmt(ast, 0).IsNameWrite(out var name, out _));
+        if (written)
+            Assert.Equal("x", name.Name);
+    }
+
+    [Fact]
+    public void NameAssignmentsAndDeclarations()
+    {
+        using var ast = MustParse("x = y; var z = 1; let w; x += 1;");
+        Assert.True(Stmt(ast, 0).IsNameAssignment(out var name, out var value));
+        Assert.Equal("x", name.Name);
+        Assert.True(value.IsIdentifierNamed("y"));
+        Assert.True(E(ast, 0).IsNameAssign(out name, out _));
+        Assert.False(Stmt(ast, 1).IsNameAssignment(out _, out _));
+        Assert.True(Stmt(ast, 1).IsNameDeclaration(out name, out value));
+        Assert.Equal("z", name.Name);
+        Assert.True(value.IsInt32(out _));
+        Assert.True(Stmt(ast, 2).IsNameDeclaration(out _, out value));
+        Assert.True(value.IsNone);
+        Assert.False(Stmt(ast, 3).IsNameAssignment(out _, out _));
+    }
+
+    [Fact]
+    public void LastOfASequence()
+    {
+        using var ast = MustParse("(a, b); (a, (b, c)); d;");
+        Assert.True(E(ast, 0).Last().IsIdentifierNamed("b"));
+        Assert.True(E(ast, 1).Last().IsIdentifierNamed("c"));
+        Assert.True(E(ast, 2).Last().IsIdentifierNamed("d"));
+    }
+
     [Fact]
     public void StringsAndVoidZero()
     {

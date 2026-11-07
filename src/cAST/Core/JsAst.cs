@@ -57,7 +57,7 @@ public sealed partial class JsAst : IDisposable
     // factories given a context). While false, resolution can skip clearing old contexts: a fresh parse has none.
     internal bool _scopeContextsSet;
 
-    private readonly string _source;
+    private string _source;
 
     /// <summary>Creates an empty arena (for building ASTs by hand).</summary>
     public JsAst() : this(string.Empty, 64, 64, 64)
@@ -96,6 +96,20 @@ public sealed partial class JsAst : IDisposable
     {
         if (HasErrors) throw new JsSyntaxException(_errors!);
         return this;
+    }
+
+    /// <summary>
+    /// Every node of the two kinds in the arena, attached to the program or left behind, as the records stand in a row: a
+    /// tree walk costs many times more, where leftovers do not matter.
+    /// </summary>
+    public IEnumerable<Node> RecordsOfKinds(NodeKind first, NodeKind second)
+    {
+        for (int id = 1; id < _nodeCount; id++)
+        {
+            var kind = _nodes[id].Kind;
+            if (kind == first || kind == second)
+                yield return new Node(this, id);
+        }
     }
 
     /// <summary>Returns a view of the node with the given id.</summary>
@@ -323,6 +337,8 @@ public sealed partial class JsAst : IDisposable
         _strings = [];
         _buckets = [];
         _nodeCount = _listCount = _stringCount = 0;
+        _source = string.Empty;
+        _resolver = null;
         ArenaPool.ReturnNodes(nodes);
         ArenaPool.ReturnLists(lists);
         ArenaPool.ReturnStrings(strings, stringCount);

@@ -93,9 +93,14 @@ public readonly struct NodeWalk : IEnumerable<Node>
     /// <summary>A struct enumerator over a <see cref="NodeWalk"/>, keeping the nodes still to visit on a pooled stack.</summary>
     public struct Enumerator : IEnumerator<Node>
     {
+        // Each kind's slots that hold a child or a list of them, in layout order: none for a leaf.
+        private static readonly byte[][] s_children = [.. NodeLayout.Slots.Select(slots => slots.Where(slot => slot >> 4 is 1 or 2).ToArray())];
+
         private readonly JsAst? _ast;
         private readonly int _root;
-        private readonly UInt128 _kinds;
+        // The kinds yielded, as bits: kinds 0 to 63, then 64 to 127.
+        private readonly ulong _low;
+        private readonly ulong _high;
         private readonly bool _enterFunctions;
         private int[]? _stack;
         private int _count;
@@ -106,7 +111,8 @@ public readonly struct NodeWalk : IEnumerable<Node>
         {
             _ast = ast;
             _root = root;
-            _kinds = kinds;
+            _low = (ulong)kinds;
+            _high = (ulong)(kinds >> 64);
             _enterFunctions = enterFunctions;
             _expand = root;
         }
@@ -133,10 +139,10 @@ public readonly struct NodeWalk : IEnumerable<Node>
                     return false;
                 }
                 int id = _stack![--_count];
-                NodeKind kind = ast!._nodes[id].Kind;
-                if (_enterFunctions || kind is not (NodeKind.FunctionLiteral or NodeKind.ArrowFunctionLiteral))
+                int kind = (int)ast!._nodes[id].Kind;
+                if (s_children[kind].Length != 0 && (_enterFunctions || kind is not ((int)NodeKind.FunctionLiteral or (int)NodeKind.ArrowFunctionLiteral)))
                     _expand = id;
-                if (((_kinds >> (int)kind) & UInt128.One) != UInt128.Zero)
+                if (((kind < 64 ? _low >> kind : _high >> (kind - 64)) & 1) != 0)
                 {
                     _current = id;
                     return true;
@@ -146,37 +152,36 @@ public readonly struct NodeWalk : IEnumerable<Node>
 
         private void PushChildren(JsAst ast, int id)
         {
-            byte[] slots = NodeLayout.Slots[(int)ast._nodes[id].Kind];
+            ref var record = ref ast._nodes[id];
+            byte[] slots = s_children[(int)record.Kind];
             for (int i = slots.Length - 1; i >= 0; i--)
             {
                 int slot = slots[i] & 15;
-                int field = Unsafe.Add(ref ast._nodes[id].A, slot);
-                switch (slots[i] >> 4)
+                int field = Unsafe.Add(ref record.A, slot);
+                int count = slots[i] >> 4 == 1 ? 1 : Unsafe.Add(ref record.A, slot + 1);
+                if (_stack is null || _count + count > _stack.Length)
+                    Grow(count);
+                if (slots[i] >> 4 == 1)
                 {
-                    case 1:
-                        if (field != 0) Push(field);
-                        break;
-                    case 2:
-                        for (int k = Unsafe.Add(ref ast._nodes[id].A, slot + 1) - 1; k >= 0; k--)
-                        {
-                            int element = ast._lists[field + k];
-                            if (element != 0) Push(element);
-                        }
-                        break;
+                    if (field != 0)
+                        _stack[_count++] = field;
+                    continue;
+                }
+                var lists = ast._lists;
+                for (int k = count - 1; k >= 0; k--)
+                {
+                    int element = lists[field + k];
+                    if (element != 0)
+                        _stack[_count++] = element;
                 }
             }
         }
 
-        private void Push(int id)
-        {
-            if (_stack is null || _count == _stack.Length) Grow();
-            _stack[_count++] = id;
-        }
-
+        // Room for so many more.
         [MemberNotNull(nameof(_stack))]
-        private void Grow()
+        private void Grow(int more)
         {
-            int[] grown = ArrayPool<int>.Shared.Rent(_stack is null ? 32 : _stack.Length * 2);
+            int[] grown = ArrayPool<int>.Shared.Rent(Math.Max(_stack is null ? 32 : _stack.Length * 2, _count + more));
             if (_stack is not null)
             {
                 _stack.AsSpan(0, _count).CopyTo(grown);

@@ -41,7 +41,7 @@ public static class JsGenerator
     public static string Generate(Node node, GeneratorOptions options)
     {
         if (node.IsNone) return string.Empty;
-        var g = new Generator(node.Ast, options.Minified, node.Ast.Source.Length + 64);
+        var g = new Generator(node.Ast, options.Minified, node.Kind == NodeKind.Program ? node.Ast.Source.Length + 64 : 1024);
         g.InitStack();
         g.Gen(node.Id);
         return g.ToStringAndDispose();
